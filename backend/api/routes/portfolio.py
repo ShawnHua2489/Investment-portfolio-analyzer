@@ -63,14 +63,131 @@ async def create_portfolio(portfolio: PortfolioCreate, db: Session = Depends(get
 @router.get("/portfolios/", response_model=List[Portfolio])
 async def get_portfolios(db: Session = Depends(get_db)):
     db_portfolios = db.query(PortfolioDB).all()
-    return [convert_db_to_model(p) for p in db_portfolios]
+    portfolios = []
+    
+    for db_portfolio in db_portfolios:
+        portfolio = convert_db_to_model(db_portfolio)
+        
+        # Calculate total value
+        total_value = sum(asset.quantity * asset.purchase_price for asset in portfolio.assets)
+        
+        # Add total value and asset count to the portfolio
+        portfolio_dict = portfolio.dict()
+        portfolio_dict["total_value"] = total_value
+        portfolio_dict["asset_count"] = len(portfolio.assets)
+        
+        portfolios.append(portfolio_dict)
+    
+    return portfolios
+
+@router.get("/portfolios/summary")
+async def get_portfolio_summary(db: Session = Depends(get_db)):
+    """Get summary of all portfolios."""
+    portfolios = db.query(PortfolioDB).all()
+    
+    if not portfolios:
+        return {
+            "total_value": 0,
+            "asset_allocation": {},
+            "risk_metrics": {
+                "beta": 0,
+                "sharpe_ratio": 0,
+                "volatility": 0
+            }
+        }
+    
+    total_value = 0
+    asset_allocation = {}
+    all_assets = []
+    
+    # Collect all assets and calculate total value
+    for portfolio in portfolios:
+        for asset in portfolio.assets:
+            total_value += asset.quantity * asset.purchase_price
+            asset_type = asset.asset_type
+            if asset_type not in asset_allocation:
+                asset_allocation[asset_type] = 0
+            asset_allocation[asset_type] += asset.quantity * asset.purchase_price
+            all_assets.append(asset)
+    
+    # Normalize asset allocation to percentages
+    if total_value > 0:
+        asset_allocation = {k: (v / total_value) * 100 for k, v in asset_allocation.items()}
+    
+    # Calculate risk metrics
+    risk_metrics = {"beta": 0, "sharpe_ratio": 0, "volatility": 0}
+    
+    if all_assets:
+        try:
+            # Get market data (using SPY as market proxy)
+            market = yf.Ticker("SPY")
+            market_hist = market.history(period="1y")["Close"]
+            market_returns = market_hist.pct_change().dropna()
+            
+            # Calculate portfolio returns
+            portfolio_returns = []
+            portfolio_weights = []
+            
+            for asset in all_assets:
+                try:
+                    ticker = yf.Ticker(asset.symbol)
+                    hist = ticker.history(period="1y")["Close"]
+                    returns = hist.pct_change().dropna()
+                    portfolio_returns.append(returns)
+                    portfolio_weights.append((asset.quantity * asset.purchase_price) / total_value)
+                except Exception as e:
+                    print(f"Error fetching data for {asset.symbol}: {str(e)}")
+            
+            if portfolio_returns:
+                # Calculate portfolio beta
+                portfolio_return_series = sum(returns * weight for returns, weight in zip(portfolio_returns, portfolio_weights))
+                covariance = portfolio_return_series.cov(market_returns)
+                market_variance = market_returns.var()
+                beta = covariance / market_variance if market_variance != 0 else 1
+                
+                # Calculate volatility (annualized)
+                volatility = portfolio_return_series.std() * (252 ** 0.5)  # 252 trading days
+                
+                # Calculate Sharpe ratio (assuming risk-free rate of 2%)
+                risk_free_rate = 0.02
+                excess_returns = portfolio_return_series.mean() * 252 - risk_free_rate
+                sharpe_ratio = excess_returns / volatility if volatility != 0 else 0
+                
+                risk_metrics = {
+                    "beta": round(beta, 2),
+                    "sharpe_ratio": round(sharpe_ratio, 2),
+                    "volatility": round(volatility * 100, 2)  # Convert to percentage
+                }
+        except Exception as e:
+            print(f"Error calculating risk metrics: {str(e)}")
+    
+    return {
+        "total_value": total_value,
+        "asset_allocation": asset_allocation,
+        "risk_metrics": risk_metrics
+    }
 
 @router.get("/portfolios/{portfolio_id}", response_model=Portfolio)
 async def get_portfolio(portfolio_id: str, db: Session = Depends(get_db)):
     db_portfolio = db.query(PortfolioDB).filter(PortfolioDB.id == portfolio_id).first()
     if not db_portfolio:
         raise HTTPException(status_code=404, detail="Portfolio not found")
-    return convert_db_to_model(db_portfolio)
+    
+    portfolio = convert_db_to_model(db_portfolio)
+    
+    # Fetch current prices for all assets
+    for asset in portfolio.assets:
+        try:
+            ticker = yf.Ticker(asset.symbol)
+            current_price = ticker.history(period="1d")['Close'].iloc[-1]
+            asset.current_price = float(current_price)
+            asset.total_value = asset.quantity * current_price
+        except Exception as e:
+            print(f"Error fetching price for {asset.symbol}: {str(e)}")
+            asset.current_price = asset.purchase_price  # Fallback to purchase price
+            asset.total_value = asset.quantity * asset.purchase_price
+    
+    return portfolio
 
 @router.get("/portfolios/{portfolio_id}/analysis")
 async def analyze_portfolio(portfolio_id: str, db: Session = Depends(get_db)):
@@ -370,190 +487,262 @@ async def learn_portfolio_analysis(portfolio_id: str, db: Session = Depends(get_
         "educational_content": educational_content
     }
 
-@router.get("/learn/commodities")
-async def learn_about_commodities():
-    """Educational endpoint to learn about commodities investing."""
+@router.get("/learn/etfs")
+async def learn_about_etfs():
+    """Educational endpoint to learn about ETF investing."""
     return {
-        "commodities_overview": {
-            "description": "Commodities are basic goods used in commerce that are interchangeable with other goods of the same type.",
-            "categories": {
-                "precious_metals": {
-                    "examples": ["Gold (GLD)", "Silver (SLV)", "Platinum (PPLT)"],
-                    "benefits": [
-                        "Hedge against inflation",
-                        "Safe haven during market turmoil",
-                        "Portfolio diversification"
-                    ],
-                    "typical_allocation": "5-10% of portfolio"
-                },
-                "energy": {
-                    "examples": ["Oil (USO)", "Natural Gas (UNG)", "Gasoline (UGA)"],
-                    "benefits": [
-                        "Inflation protection",
-                        "Geopolitical risk hedge",
-                        "Economic growth exposure"
-                    ],
-                    "typical_allocation": "5-10% of portfolio"
-                },
-                "agricultural": {
-                    "examples": ["Corn (CORN)", "Wheat (WEAT)", "Soybeans (SOYB)"],
-                    "benefits": [
-                        "Weather risk hedge",
-                        "Population growth exposure",
-                        "Diversification from financial assets"
-                    ],
-                    "typical_allocation": "3-7% of portfolio"
-                },
-                "industrial_metals": {
-                    "examples": ["Copper (CPER)", "Aluminum (JJN)", "Zinc (ZINC)"],
-                    "benefits": [
-                        "Industrial growth exposure",
-                        "Infrastructure development play",
-                        "Economic cycle hedge"
-                    ],
-                    "typical_allocation": "3-7% of portfolio"
-                }
-            },
-            "investment_methods": {
-                "etfs": {
-                    "description": "Exchange-traded funds that track commodity prices",
-                    "advantages": [
-                        "Easy to trade",
-                        "Liquid markets",
-                        "Low cost"
-                    ]
-                },
-                "futures": {
-                    "description": "Contracts to buy or sell commodities at a future date",
-                    "advantages": [
-                        "Direct exposure",
-                        "Leverage potential",
-                        "Price discovery"
-                    ]
-                },
-                "stocks": {
-                    "description": "Shares of companies involved in commodity production",
-                    "advantages": [
-                        "Dividend potential",
-                        "Management expertise",
-                        "Operational leverage"
-                    ]
-                }
-            },
-            "risk_considerations": [
-                "Commodity prices can be highly volatile",
-                "Storage and transportation costs",
-                "Geopolitical risks",
-                "Weather impacts on agricultural commodities",
-                "Currency effects on international commodities"
-            ],
-            "portfolio_integration": {
-                "recommendations": [
-                    "Start with a small allocation (5-10%)",
-                    "Diversify across different commodity types",
-                    "Consider using ETFs for easier access",
-                    "Rebalance regularly to maintain target allocation",
-                    "Monitor correlation with other portfolio assets"
+        "description": "Exchange-Traded Funds (ETFs) are investment funds traded on stock exchanges, offering diversified exposure to various assets.",
+        "categories": [
+            {
+                "name": "Index ETFs",
+                "examples": ["SPY", "VTI", "QQQ"],
+                "benefits": [
+                    "Broad market exposure",
+                    "Low cost",
+                    "High liquidity"
                 ],
-                "monitoring": [
-                    "Track commodity price trends",
-                    "Watch for contango/backwardation in futures",
-                    "Monitor global supply and demand",
-                    "Consider seasonal factors",
-                    "Watch currency impacts"
+                "typical_allocation": "40-60% of portfolio"
+            },
+            {
+                "name": "Sector ETFs",
+                "examples": ["XLF", "XLK", "XLE"],
+                "benefits": [
+                    "Industry-specific exposure",
+                    "Tactical allocation",
+                    "Thematic investing"
+                ],
+                "typical_allocation": "10-30% of portfolio"
+            },
+            {
+                "name": "Smart Beta ETFs",
+                "examples": ["USMV", "QUAL", "MTUM"],
+                "benefits": [
+                    "Factor-based investing",
+                    "Enhanced diversification",
+                    "Potential outperformance"
+                ],
+                "typical_allocation": "10-20% of portfolio"
+            }
+        ],
+        "investment_methods": [
+            {
+                "method": "Core-Satellite",
+                "description": "Using broad market ETFs as core holdings with specialized ETFs as satellite positions",
+                "advantages": [
+                    "Balanced approach",
+                    "Cost-effective",
+                    "Easy to rebalance"
+                ]
+            },
+            {
+                "method": "Asset Allocation",
+                "description": "Using ETFs to build a diversified portfolio across asset classes",
+                "advantages": [
+                    "Complete diversification",
+                    "Low maintenance",
+                    "Easy to adjust"
+                ]
+            },
+            {
+                "method": "Tactical Trading",
+                "description": "Using ETFs for short-term market opportunities",
+                "advantages": [
+                    "High liquidity",
+                    "Lower risk than individual stocks",
+                    "Sector rotation strategies"
                 ]
             }
-        }
+        ],
+        "risks": [
+            "Market risk",
+            "Tracking error",
+            "Trading volume/liquidity risk",
+            "Management fee impact",
+            "Complex ETF structures (leveraged/inverse)"
+        ],
+        "portfolio_integration": [
+            "Use broad market ETFs as portfolio foundation",
+            "Add sector ETFs for tactical positions",
+            "Consider factor ETFs for enhanced returns",
+            "Monitor total expense ratios",
+            "Regular rebalancing to maintain allocations"
+        ]
     }
 
-@router.get("/learn/commodities/{symbol}")
-async def learn_about_specific_commodity(symbol: str):
-    """Learn about a specific commodity ETF."""
-    commodity_info = {
-        "GLD": {
-            "name": "SPDR Gold Trust",
-            "description": "The largest physically-backed gold ETF in the world",
-            "key_facts": {
-                "inception_date": "2004-11-18",
-                "expense_ratio": "0.40%",
-                "underlying_asset": "Physical Gold",
-                "storage_location": "London, UK"
+@router.get("/learn/stocks")
+async def learn_about_stocks():
+    """Educational endpoint to learn about stocks investing."""
+    return {
+        "description": "Stocks represent ownership in a company and are one of the most common investment vehicles.",
+        "categories": [
+            {
+                "name": "Growth Stocks",
+                "examples": ["AAPL", "MSFT", "AMZN"],
+                "benefits": [
+                    "High potential returns",
+                    "Capital appreciation",
+                    "Market leadership potential"
+                ],
+                "typical_allocation": "20-40% of portfolio"
             },
-            "investment_thesis": [
-                "Hedge against inflation",
-                "Safe haven during market turmoil",
-                "Portfolio diversification",
-                "Currency hedge"
-            ],
-            "risks": [
-                "Gold price volatility",
-                "Storage and insurance costs",
-                "Counterparty risk with custodians",
-                "Currency exchange rate risk"
-            ],
-            "historical_performance": {
-                "1_year": "Typically tracks gold spot price",
-                "5_year": "Long-term inflation hedge",
-                "10_year": "Store of value preservation"
-            }
-        },
-        "SLV": {
-            "name": "iShares Silver Trust",
-            "description": "The largest physically-backed silver ETF",
-            "key_facts": {
-                "inception_date": "2006-04-28",
-                "expense_ratio": "0.50%",
-                "underlying_asset": "Physical Silver",
-                "storage_location": "London, UK"
+            {
+                "name": "Value Stocks",
+                "examples": ["BRK.B", "JNJ", "PG"],
+                "benefits": [
+                    "Lower valuations",
+                    "Dividend income",
+                    "Defensive characteristics"
+                ],
+                "typical_allocation": "20-40% of portfolio"
             },
-            "investment_thesis": [
-                "Industrial and precious metal exposure",
-                "Inflation hedge",
-                "Portfolio diversification",
-                "Lower price point than gold"
-            ],
-            "risks": [
-                "Higher volatility than gold",
-                "Industrial demand sensitivity",
-                "Storage costs",
-                "Market manipulation concerns"
-            ],
-            "historical_performance": {
-                "1_year": "Typically tracks silver spot price",
-                "5_year": "Industrial and monetary demand play",
-                "10_year": "Long-term value preservation"
+            {
+                "name": "Dividend Stocks",
+                "examples": ["KO", "PEP", "VZ"],
+                "benefits": [
+                    "Regular income",
+                    "Lower volatility",
+                    "Inflation protection"
+                ],
+                "typical_allocation": "10-30% of portfolio"
             }
-        },
-        "USO": {
-            "name": "United States Oil Fund",
-            "description": "ETF that tracks the price of crude oil",
-            "key_facts": {
-                "inception_date": "2006-04-10",
-                "expense_ratio": "0.45%",
-                "underlying_asset": "Crude Oil Futures",
-                "benchmark": "Near-month NYMEX crude oil futures"
+        ],
+        "investment_methods": [
+            {
+                "method": "Individual Stocks",
+                "description": "Direct ownership of company shares",
+                "advantages": [
+                    "Full control over portfolio",
+                    "No management fees",
+                    "Tax efficiency"
+                ]
             },
-            "investment_thesis": [
-                "Direct oil price exposure",
-                "Inflation hedge",
-                "Geopolitical risk hedge",
-                "Economic growth play"
-            ],
-            "risks": [
-                "Contango/backwardation effects",
-                "High volatility",
-                "Geopolitical risks",
-                "Storage and transportation costs"
-            ],
-            "historical_performance": {
-                "1_year": "Tracks oil price movements",
-                "5_year": "Energy sector exposure",
-                "10_year": "Long-term energy price trends"
+            {
+                "method": "ETFs",
+                "description": "Exchange-traded funds that track stock indices or sectors",
+                "advantages": [
+                    "Diversification",
+                    "Lower costs",
+                    "Easy to trade"
+                ]
+            },
+            {
+                "method": "Mutual Funds",
+                "description": "Professionally managed investment vehicles",
+                "advantages": [
+                    "Professional management",
+                    "Broad diversification",
+                    "Regular investment options"
+                ]
             }
-        }
+        ],
+        "risks": [
+            "Market volatility",
+            "Company-specific risks",
+            "Economic cycle sensitivity",
+            "Interest rate sensitivity",
+            "Political and regulatory risks"
+        ],
+        "portfolio_integration": [
+            "Start with a core position in broad market ETFs",
+            "Add individual stocks for specific themes or opportunities",
+            "Maintain sector diversification",
+            "Consider both growth and value styles",
+            "Regular rebalancing to maintain target allocation"
+        ]
     }
+
+@router.get("/learn/bonds")
+async def learn_about_bonds():
+    """Educational endpoint to learn about bonds investing."""
+    return {
+        "description": "Bonds are debt securities that provide regular interest payments and return of principal at maturity.",
+        "categories": [
+            {
+                "name": "Government Bonds",
+                "examples": ["U.S. Treasury Bonds", "T-Bills", "TIPS"],
+                "benefits": [
+                    "Highest credit quality",
+                    "Tax advantages",
+                    "Liquidity"
+                ],
+                "typical_allocation": "20-40% of portfolio"
+            },
+            {
+                "name": "Corporate Bonds",
+                "examples": ["Investment Grade", "High Yield", "Convertible Bonds"],
+                "benefits": [
+                    "Higher yields than government bonds",
+                    "Diversification",
+                    "Regular income"
+                ],
+                "typical_allocation": "10-30% of portfolio"
+            },
+            {
+                "name": "Municipal Bonds",
+                "examples": ["State Bonds", "Local Government Bonds"],
+                "benefits": [
+                    "Tax-exempt income",
+                    "Lower default risk",
+                    "Community investment"
+                ],
+                "typical_allocation": "5-15% of portfolio"
+            }
+        ],
+        "investment_methods": [
+            {
+                "method": "Individual Bonds",
+                "description": "Direct ownership of bond securities",
+                "advantages": [
+                    "Known return at maturity",
+                    "No management fees",
+                    "Customizable duration"
+                ]
+            },
+            {
+                "method": "Bond ETFs",
+                "description": "Exchange-traded funds that track bond indices",
+                "advantages": [
+                    "Diversification",
+                    "Liquidity",
+                    "Lower minimum investment"
+                ]
+            },
+            {
+                "method": "Bond Mutual Funds",
+                "description": "Professionally managed bond portfolios",
+                "advantages": [
+                    "Professional management",
+                    "Active duration management",
+                    "Regular income distributions"
+                ]
+            }
+        ],
+        "risks": [
+            "Interest rate risk",
+            "Credit risk",
+            "Inflation risk",
+            "Liquidity risk",
+            "Call risk"
+        ],
+        "portfolio_integration": [
+            "Use bonds to reduce portfolio volatility",
+            "Match bond duration to investment horizon",
+            "Consider tax implications",
+            "Diversify across bond types",
+            "Regular rebalancing to maintain target allocation"
+        ]
+    }
+
+@router.put("/portfolios/{portfolio_id}", response_model=Portfolio)
+async def update_portfolio(portfolio_id: str, portfolio: PortfolioCreate, db: Session = Depends(get_db)):
+    db_portfolio = db.query(PortfolioDB).filter(PortfolioDB.id == portfolio_id).first()
+    if not db_portfolio:
+        raise HTTPException(status_code=404, detail="Portfolio not found")
     
-    if symbol not in commodity_info:
-        raise HTTPException(status_code=404, detail=f"Commodity ETF '{symbol}' not found. Available ETFs: {', '.join(commodity_info.keys())}")
+    db_portfolio.name = portfolio.name
+    db_portfolio.description = portfolio.description
+    db_portfolio.updated_at = datetime.now()
     
-    return commodity_info[symbol] 
+    db.commit()
+    db.refresh(db_portfolio)
+    return convert_db_to_model(db_portfolio) 

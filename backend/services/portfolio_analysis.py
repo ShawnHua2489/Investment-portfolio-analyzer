@@ -4,124 +4,24 @@ import numpy as np
 from datetime import datetime, timedelta
 import yfinance as yf
 from api.models.portfolio import Portfolio, Asset
-import requests
-import json
+from services.data_cache import DataCache
+import logging
+
+logger = logging.getLogger(__name__)
 
 class PortfolioAnalyzer:
     def __init__(self, portfolio: Portfolio):
         self.portfolio = portfolio
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        })
-        self.cache = {}
-
-    def clear_cache(self, symbol: str = None):
-        """Clear the data cache for a specific symbol or all symbols."""
-        if symbol:
-            # Clear cache for specific symbol
-            keys_to_remove = [k for k in self.cache.keys() if k.startswith(symbol)]
-            for k in keys_to_remove:
-                del self.cache[k]
-        else:
-            # Clear entire cache
-            self.cache.clear()
+        self.data_cache = DataCache()
+        self.logger = logging.getLogger(__name__)
 
     def _get_ticker_data(self, symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
-        """Get historical data for a ticker with multiple fallback methods."""
-        # Check cache first
-        cache_key = f"{symbol}_{period}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-
-        data = None
-        errors = []
-
-        # Method 1: Try yfinance's download method
+        """Get historical data for a ticker using the data cache."""
         try:
-            ticker = yf.Ticker(symbol)
-            data = ticker.history(period=period)
-            if not data.empty:
-                self.cache[cache_key] = data
-                return data
+            return self.data_cache.get_data(symbol, period)
         except Exception as e:
-            errors.append(f"yfinance download failed: {str(e)}")
-
-        # Method 2: Try Yahoo Finance API directly
-        try:
-            intervals = {"1d": "1d", "1mo": "1mo", "1y": "1d", "5y": "1wk"}
-            interval = intervals.get(period, "1d")
-            
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-            params = {
-                "range": period,
-                "interval": interval,
-                "includePrePost": False
-            }
-            response = self.session.get(url, params=params)
-            
-            if response.status_code == 200:
-                json_data = response.json()
-                if 'chart' in json_data and 'result' in json_data['chart'] and json_data['chart']['result']:
-                    result = json_data['chart']['result'][0]
-                    timestamps = result['timestamp']
-                    quotes = result['indicators']['quote'][0]
-                    
-                    if all(key in quotes for key in ['open', 'high', 'low', 'close', 'volume']):
-                        df = pd.DataFrame({
-                            'Open': quotes['open'],
-                            'High': quotes['high'],
-                            'Low': quotes['low'],
-                            'Close': quotes['close'],
-                            'Volume': quotes['volume']
-                        }, index=pd.to_datetime(timestamps, unit='s'))
-                        df = df.dropna()
-                        
-                        if not df.empty:
-                            self.cache[cache_key] = df
-                            return df
-        except Exception as e:
-            errors.append(f"Yahoo Finance API failed: {str(e)}")
-
-        # Method 3: Try alternative Yahoo Finance endpoint
-        try:
-            url = f"https://finance.yahoo.com/quote/{symbol}/history"
-            response = self.session.get(url)
-            
-            if response.status_code == 200:
-                # Extract the data from the page's embedded JSON
-                html = response.text
-                json_str = html[html.find('"HistoricalPriceStore":')+23:html.find(',"isPending"')]
-                json_data = json.loads(json_str)
-                
-                if 'prices' in json_data:
-                    prices = json_data['prices']
-                    df = pd.DataFrame(prices)
-                    df['date'] = pd.to_datetime(df['date'], unit='s')
-                    df.set_index('date', inplace=True)
-                    df = df.rename(columns={
-                        'open': 'Open',
-                        'high': 'High',
-                        'low': 'Low',
-                        'close': 'Close',
-                        'volume': 'Volume'
-                    })
-                    df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-                    
-                    if not df.empty:
-                        self.cache[cache_key] = df
-                        return df
-        except Exception as e:
-            errors.append(f"Alternative Yahoo Finance endpoint failed: {str(e)}")
-
-        # If all methods fail, try to return cached data if available
-        if data is not None and not data.empty:
-            self.cache[cache_key] = data
-            return data
-
-        # Log all errors for debugging
-        print(f"Failed to fetch data for {symbol}. Errors: {'; '.join(errors)}")
-        return None
+            self.logger.error(f"Failed to fetch data for {symbol}: {str(e)}")
+            return None
 
     def calculate_total_value(self) -> float:
         """Calculate the total current value of the portfolio."""
@@ -129,12 +29,10 @@ class PortfolioAnalyzer:
         for asset in self.portfolio.assets:
             try:
                 hist_data = self._get_ticker_data(asset.symbol, period="1d")
-                if hist_data is not None and not hist_data.empty:
-                    current_price = hist_data['Close'].iloc[-1]
-                else:
-                    current_price = asset.purchase_price
+                current_price = hist_data['Close'].iloc[-1] if hist_data is not None and not hist_data.empty else asset.purchase_price
                 total_value += asset.quantity * current_price
-            except:
+            except Exception as e:
+                self.logger.warning(f"Using purchase price for {asset.symbol} due to error: {str(e)}")
                 total_value += asset.quantity * asset.purchase_price
         return total_value
 
@@ -149,12 +47,10 @@ class PortfolioAnalyzer:
         for asset in self.portfolio.assets:
             try:
                 hist_data = self._get_ticker_data(asset.symbol, period="1d")
-                if hist_data is not None and not hist_data.empty:
-                    current_price = hist_data['Close'].iloc[-1]
-                else:
-                    current_price = asset.purchase_price
+                current_price = hist_data['Close'].iloc[-1] if hist_data is not None and not hist_data.empty else asset.purchase_price
                 asset_value = asset.quantity * current_price
-            except:
+            except Exception as e:
+                self.logger.warning(f"Using purchase price for {asset.symbol} due to error: {str(e)}")
                 asset_value = asset.quantity * asset.purchase_price
                 
             percentage = (asset_value / total_value) * 100 if total_value > 0 else 0

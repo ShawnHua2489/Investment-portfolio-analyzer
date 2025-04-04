@@ -9,6 +9,8 @@ class Asset(BaseModel):
     purchase_price: float
     purchase_date: datetime
     asset_type: str  # e.g., "stock", "bond", "etf"
+    current_price: Optional[float] = None
+    total_value: Optional[float] = None
 
 class Transaction(BaseModel):
     id: str
@@ -28,6 +30,8 @@ class Portfolio(PortfolioCreate):
     transactions: List[Transaction] = []
     created_at: datetime
     updated_at: datetime
+    total_value: Optional[float] = 0
+    asset_count: Optional[int] = 0
 
     class Config:
         from_attributes = True 
