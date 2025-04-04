@@ -1,31 +1,33 @@
 # Investment Portfolio Analyzer
 
-A comprehensive investment portfolio analysis tool that helps you track, analyze, and optimize your investment portfolio. Built with FastAPI and React.
+A sophisticated investment portfolio analysis tool that helps you track, analyze, and optimize your investment portfolio. Built with FastAPI and React, featuring an elegant UI and robust financial analytics.
 
 ## Features
 
-- Portfolio tracking and management
-- Real-time market data integration with Yahoo Finance
-- Risk analysis and metrics calculation
-- Asset allocation optimization
-- Commodity investment tracking
-- Educational content for financial concepts
-- Interactive web interface
+- Portfolio tracking and management with real-time updates
+- Advanced risk metrics calculation (Beta, Sharpe Ratio, Volatility)
+- Multi-source market data integration with fallback options
+- Intelligent asset allocation optimization
+- Interactive data visualizations and charts
+- Comprehensive educational content
+- Elegant, responsive web interface
+- Robust error handling and data validation
 
 ## Tech Stack
 
 ### Backend
-- FastAPI (Python)
+- FastAPI (Python 3.9+)
 - SQLAlchemy (Database ORM)
-- yfinance (Market data)
-- pandas (Data analysis)
-- numpy (Numerical computations)
+- yfinance & Direct Yahoo Finance API integration
+- pandas & numpy for financial calculations
+- Advanced caching system for market data
 
 ### Frontend
-- React
-- TypeScript
-- Material-UI
-- Chart.js
+- React with TypeScript
+- Material-UI components
+- Chart.js for data visualization
+- Responsive design with modern aesthetics
+- Real-time data updates
 
 ## Getting Started
 
@@ -33,6 +35,7 @@ A comprehensive investment portfolio analysis tool that helps you track, analyze
 - Python 3.9+
 - Node.js 14+
 - npm or yarn
+- Git
 
 ### Backend Setup
 
@@ -81,11 +84,17 @@ investment-portfolio-analyzer/
 │   │   ├── models/
 │   │   └── routes/
 │   ├── services/
+│   │   ├── data_cache.py
+│   │   ├── portfolio_analysis.py
+│   │   └── risk_management.py
 │   ├── database.py
 │   ├── main.py
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
+│   │   ├── components/
+│   │   ├── pages/
+│   │   └── services/
 │   ├── public/
 │   └── package.json
 └── README.md
@@ -94,24 +103,42 @@ investment-portfolio-analyzer/
 ## Features in Detail
 
 ### Portfolio Management
-- Create and manage multiple portfolios
-- Track assets and their performance
-- Monitor portfolio value and returns
+- Create and manage multiple investment portfolios
+- Real-time tracking of assets and performance
+- Automated portfolio value updates
+- Transaction history tracking
 
 ### Risk Analysis
-- Calculate key risk metrics (Beta, Sharpe Ratio, VaR)
-- Portfolio correlation analysis
+- Advanced risk metrics calculation:
+  - Beta (market correlation)
+  - Sharpe Ratio (risk-adjusted returns)
+  - Value at Risk (VaR)
+  - Portfolio volatility
+- Correlation matrix analysis
 - Efficient frontier optimization
+- Stress testing capabilities
 
-### Market Data
-- Real-time stock and ETF data
-- Historical price tracking
-- Commodity price monitoring
+### Market Data Integration
+- Multi-source market data fetching
+- Intelligent caching system
+- Rate limit handling
+- Fallback mechanisms for data reliability
+- Historical price analysis
 
 ### Educational Content
-- Financial metrics explanation
+- Comprehensive financial metrics explanations
 - Investment strategy guides
-- Risk management tips
+- Risk management tutorials
+- Market analysis tools
+
+## Recent Updates
+
+- Enhanced market data reliability with multiple data sources
+- Improved error handling and data validation
+- Advanced caching system for better performance
+- Robust risk metrics calculation
+- Elegant UI design with modern aesthetics
+- Comprehensive educational content
 
 ## Contributing
 
@@ -128,5 +155,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgments
 
 - Yahoo Finance API for market data
-- FastAPI for the backend framework
-- React for the frontend framework 
+- FastAPI for the robust backend framework
+- React and Material-UI for the frontend implementation
+- Open source community for various tools and libraries 
